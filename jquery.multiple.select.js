@@ -37,7 +37,14 @@
         }
         this.$parent.css('width', options.width || elWidth);
 
-        if (!this.options.keepOpen) {
+        if (this.options.url) {
+            this.filterTimeout = null;
+            this.remoteMode = true;
+            this.initialized = false;
+            this.isAllLoaded = false;
+        }
+
+        if (!this.options.keepOpen && !this.remoteMode) {
             $('body').click(function (e) {
                 if ($(e.target)[0] === that.$choice[0] ||
                     $(e.target).parents('.ms-choice')[0] === that.$choice[0]) {
@@ -46,10 +53,9 @@
 
                 if (e.target.tagName.toUpperCase() === "INPUT" &&
                     ($(e.target)[0] === that.$drop[0] ||
-                    $(e.target).parents('.ms-drop')[0] !== that.$drop[0]) &&
+                        $(e.target).parents('.ms-drop')[0] !== that.$drop[0]) &&
                     that.options.isOpen) {
-
-                    console.log('close on body', $(e.target).closest('.ms-drop'));
+                    console.log(e.target.tagName.toUpperCase() === "INPUT", $(e.target)[0] === that.$drop[0], $(e.target).parents('.ms-drop')[0] !== that.$drop[0]);
                     that.close();
                 }
             });
@@ -58,13 +64,6 @@
         this.selectAllName = 'name="selectAll' + name + '"';
         this.selectGroupName = 'name="selectGroup' + name + '"';
         this.selectItemName = 'name="selectItem' + name + '"';
-
-        this.filterTimeout = null;
-
-        if(this.options.url) {
-            this.options.minLetters = this.options.minLetters || 2;
-        }
-
     }
 
     MultipleSelect.prototype = {
@@ -73,17 +72,17 @@
         init: function () {
             var that = this,
                 html = [];
-            if (this.options.filter || this.options.url) {
+            if (this.options.filter || this.remoteMode) {
                 html.push(
                     '<div class="ms-search">',
                     '<input type="text" autocomplete="off" autocorrect="off" autocapitilize="off" spellcheck="false"' +
-                    (this.options.url? 'placeholder="Type at least ' + this.options.minLetters + ' keys to process"' : '') +
+                    (this.remoteMode? 'placeholder="' + this.options.minLettersText.replace('%', this.options.minLetters) + '"' : '') +
                     '>',
                     '</div>'
                 );
             }
 
-            if (this.options.url) {
+            if (this.remoteMode) {
                 html.push('<ul class="ms-selected-list">');
                 $.each(this.$el.find('option:selected'), function (i, elm) {
                     html.push(that.optionToHtml(i, elm));
@@ -103,7 +102,7 @@
                 );
             }
 
-            if (this.options.url) {
+            if (this.remoteMode) {
                 html.push(
                     '<li class="ms-loading-state">',
                         '<span class="ms-spinner"></span>',
@@ -133,12 +132,14 @@
             this.$disableItems = this.$drop.find('input[' + this.selectItemName + ']:disabled');
             this.$noResults = this.$drop.find('.ms-no-results');
 
-            if (this.options.url) {
+            if (this.remoteMode) {
                 this.$spinner = this.$drop.find('.ms-loading-state');
                 this.$selectList = this.$drop.find('ul:not(.ms-selected-list)');
-                this.$selectedList = this.$drop.find('.ms-selected-list');
-                this.$selectItems = this.$drop.find('input[' + this.selectItemName + ']:enabled:not(:selected)');
-                this.$selectedItems = this.$drop.find('input[' + this.selectItemName + ']:enabled:selected');
+                this.$selectedList = this.$drop.find('ul.ms-selected-list');
+                this.$selectGroups = $([]);
+                this.$selectedGroups = this.$drop.find('input[' + this.selectGroupName + ']:enabled:checked');
+                this.$selectItems = $([]);
+                this.$selectedItems = this.$drop.find('input[' + this.selectItemName + ']:enabled:checked');
                 this.cache = {};
             }
 
@@ -146,10 +147,9 @@
             this.updateSelectAll(true);
             this.update(true);
 
-            if (this.options.url) {
+            if (this.remoteMode) {
                 this.clearLoadingState();
             }
-
 
             if (this.options.isOpen) {
                 this.open();
@@ -311,9 +311,22 @@
                 }
             });
 
-            if (this.options.url) {
+            if (this.remoteMode) {
+                this.$selectedGroups.off('click').on('click', function () {
+                    var group = $(this).parent().attr('data-group'),
+                        $items = that.$selectedItems.filter(':visible'),
+                        $children = $items.filter('[data-group="' + group + '"]'),
+                        checked = $children.length !== $children.filter(':checked').length;
+                    $children.prop('checked', checked);
+                    that.update();
+                    that.options.onOptgroupClick({
+                        label: $(this).parent().text(),
+                        checked: checked,
+                        children: $children.get()
+                    });
+                });
+
                 this.$selectedItems.off('click').on('click', function () {
-                    that.updateSelectAll();
                     that.update();
                     that.updateOptGroupSelect();
                     that.options.onClick({
@@ -326,13 +339,30 @@
         },
 
         setLoadingState: function() {
+            this.$noResults.hide();
             this.$spinner.show();
             this.$searchInput.prop('disabled', true);
+            this.options.onLoadStart();
         },
 
         clearLoadingState: function() {
             this.$spinner.hide();
             this.$searchInput.prop('disabled', false);
+            this.options.onLoadEnd();
+        },
+
+        checkEmptiness: function() {
+            if (this.$selectItems.length > 0) {
+                this.$noResults.hide();
+            } else {
+                this.$noResults.show();
+            }
+        },
+
+        clearList: function() {
+            this.$selectList.find('li').not('.ms-loading-state, .ms-no-results').remove();
+            this.$selectItems = $([]);
+            this.checkEmptiness();
         },
 
         open: function () {
@@ -345,12 +375,12 @@
 
             // fix filter bug: no results show
             this.$selectAll.parent().show();
-            this.$noResults.hide();
+            // this.$noResults.hide();
 
             // Fix #77: 'All selected' when no options
             if (this.$el.children().length === 0) {
                 this.$selectAll.parent().hide();
-                this.$noResults.show();
+                // this.$noResults.show();
             }
 
             if (this.options.container) {
@@ -365,14 +395,54 @@
             }
             this.options.onOpen();
 
-            if (this.options.url && this.$selectItems.length === 0) {
-                this.$noResults.show();
+            if (this.remoteMode) {
+                this.$searchInput.focus();
             }
 
-            if (this.options.url) {
-                this.$selectItems.closest('li').remove();
-                this.$selectItems = $([]);
+            if (this.remoteMode && !this.initialized) {
+                var that = this;
+                this.clearList();
+                this.setLoadingState();
+                this.options.onLoadStart();
+                $.ajax(this.options.url, {
+                    type: 'GET',
+                    data: {limit: this.options.limit + 1} ,
+                    success: function(data) {
+                        var items = JSON.parse(data).data;
+                        that.clearLoadingState();
+
+                        that.initialized = true;
+                        that.isAllLoaded = that.options.limit >= that.getLengthOfLoadedOptions(items);
+
+                        that.setItems(items);
+                    },
+                    error: function() {
+                        that.clearLoadingState();
+                    }
+                });
             }
+        },
+
+        getLengthOfLoadedOptions: function(items)
+        {
+            var count = 0;
+            for(var key in items) {
+                if (Array.isArray(items[key])) { //it's category
+                    count += items[key].length;
+                } else {
+                   count++;
+                }
+            }
+            return count;
+        },
+
+        setItems: function(items)
+        {
+            this.$selectList.append(this.renderListFromJson(items));
+            this.$selectItems = this.$selectList.find('input[' + this.selectItemName + ']:enabled');
+            this.$selectGroups = this.$selectList.find('input[' + this.selectGroupName + ']:enabled');
+            this.events();
+            this.checkEmptiness();
         },
 
         close: function () {
@@ -418,7 +488,7 @@
             }
             // set selects to select
 
-            if (!this.options.url) {
+            if (!this.remoteMode) {
                 this.$el.val(this.getSelects());
                 // add selected class to selected li
                 this.$drop.find('li').removeClass('selected');
@@ -427,30 +497,79 @@
                 });
             } else {
                 var that = this;
-                this.$selectItems.filter('input[' + this.selectItemName + ']:checked').closest('li').appendTo(this.$selectedList);
-                this.$selectedItems.filter('input[' + this.selectItemName + ']:not(:checked)').each(function(i, item) {
-                    var $listItem = $(item).closest('li'),
-                        text = $listItem.text().toLowerCase(),
-                        search = that.$searchInput.val().toLowerCase();
+                this.$selectItems.filter('input[' + this.selectItemName + ']:checked').each(function(i, item) {
+                    var $item = $(item),
+                        $container = that.$selectedList,
+                        groupAttr = $item.attr('data-group'),
+                        $group = that.$selectedGroups.closest('[data-group]').filter('[data-group=' + groupAttr + ']').closest('li');
 
-                    setTimeout(function() { //timeout for keeping element on place, while handle click event on body
-                        if (text.indexOf(search) === 1) {
-                            $listItem.prependTo(that.$selectList);
-                        } else {
-                            $listItem.remove();
+                    if (groupAttr) {
+                        if (!$group.length) {
+                            $group = that.$selectGroups.closest('[data-group]').filter('[data-group=' + groupAttr + ']').closest('li').clone(true);
+                            $group.find('input').prop('checked', true);
+                            $group.appendTo($container);
+                            that.$selectedGroups = that.$selectedGroups.add($group.find('input'));
                         }
-                    })
+                        $item.closest('li').insertAfter($group);
+                    } else {
+                        $item.closest('li').appendTo($container);
+                    }
                 });
+
+                this.$selectedItems.filter('input[' + this.selectItemName + ']:not(:checked)').each(function(i, item) {
+                    var $item = $(item),
+                        $listItem = $item.closest('li'),
+                        text = $listItem.text().toLowerCase(),
+                        search = that.$searchInput.val().toLowerCase(),
+                        $container = that.$selectList,
+                        groupAttr = $item.attr('data-group'),
+                        $group = that.$selectGroups.closest('[data-group]').filter('[data-group=' + groupAttr + ']').closest('li');
+
+                    if (text.indexOf(search) !== 1) {
+                        return $listItem.remove();
+                    }
+
+                    if (groupAttr) {
+                        if (!$group.length) {
+                            $group = that.$selectedGroups.closest('[data-group]').filter('[data-group=' + groupAttr + ']').closest('li').clone(true);
+                            $group.find('input').prop('checked', false);
+                            $group.prependTo($container);
+                            that.$selectGroups = that.$selectGroups.add($group.find('input'));
+                        }
+                        $item.closest('li').insertAfter($group);
+                    } else {
+                        $listItem.prependTo($container);
+                    }
+                });
+
                 this.$selectItems = this.$drop.find('input[' + this.selectItemName + ']:not(:checked)');
                 this.$selectedItems = this.$drop.find('input[' + this.selectItemName + ']:checked');
 
+                this.$selectedGroups.closest('[data-group]').each(function(i, group) {
+                    var $group = $(group),
+                        groupAttr = $group.attr('data-group');
+                    if (!that.$selectedItems.filter('input[data-group=' + groupAttr + ']:checked').length) {
+                        $group.closest('li').remove();
+                    }
+                });
+
+                this.$selectGroups.closest('[data-group]').each(function(i, group) {
+                    var $group = $(group),
+                        groupAttr = $group.attr('data-group');
+                    if (!that.$selectItems.filter('input[data-group=' + groupAttr + ']:not(:checked)').length) {
+                        $group.closest('li').remove();
+                    }
+                });
+                this.$selectGroups = this.$drop.find('input[' + this.selectGroupName + ']:not(:checked)');
+                this.$selectedGroups = this.$drop.find('input[' + this.selectGroupName + ']:checked');
+                this.events();
+
                 this.$el.html('');
                 this.$selectedItems.map(function(index, item) {
-                    var $option = '<option selected value="' + $(item).val() + '">Dummy</option>';
+                    var $option = '<option selected value="' + $(item).val() + '"></option>';
                     that.$el.append($option);
                 });
-                var method = this.$selectItems.length? 'hide' : 'show';
-                this.$noResults[method]();
+                this.checkEmptiness();
             }
 
             // trigger <select> change event
@@ -572,71 +691,38 @@
                 text = $.trim(this.$searchInput.val()).toLowerCase(),
                 items;
 
-            if (this.options.url) {
-
-                Object.keys(this.cache).forEach(function(key) {
-                    if(text.indexOf(key) === 0) {
-                        items = that.cache[key];
-                    }
-                });
+            if (this.remoteMode && !this.isAllLoaded) {
+                items = this.getFromCache(text);
                 clearTimeout(this.filterTimeout);
 
                 if (!items) {
                     this.filterTimeout = setTimeout(function() {
-                        if (text.length < that.options.minLetters) {
-                            that.$selectItems.closest('li').remove();
-                            that.$selectItems = $([]);
-                            return;
-                        }
+                        that.clearList();
 
-                        that.$noResults.hide();
-                        that.$selectList.find('li').not('.ms-loading-state, .ms-no-results').remove();
-                        that.$selectItems = $([]);
+                        if (text.length < that.options.minLetters) return;
+
                         that.setLoadingState();
                         $.ajax(that.options.url, {
                             type: 'GET',
-                            data: {search: text} ,
+                            data: {search: text, limit: that.options.limit} ,
                             success: function(data) {
                                 var items = JSON.parse(data).data;
 
-                                Object.keys(that.cache).forEach(function(key) {
-                                    if(key.indexOf(text) === 0) delete(that.cache[key]);
-                                });
-                                that.cache[text] = items;
-
+                                that.putInCache(text, items);
                                 that.clearLoadingState();
-                                that.$selectList.append(items.reduce(function(html, jsonItem) {
-                                    if (!that.$selectedItems.is('[value=' + jsonItem.value + ']')) {
-                                        html = html + that.jsonToHtml(jsonItem);
-                                    }
-                                    return html;
-                                }, ''));
 
-                                that.$selectItems = that.$selectList.find('input[' + that.selectItemName + ']:enabled');
-                                var method = that.$selectItems.length? 'hide' : 'show';
-                                that.$noResults[method]();
-
+                                that.setItems(items);
                                 that.$searchInput.focus();
-                                that.events();
                             },
                             error: function() {
                                 that.clearLoadingState();
                             }
                         });
-                    }, 600);
+                    }, this.options.delay);
                     return;
                 } else {
-                    that.$selectList.find('li').not('.ms-loading-state, .ms-no-results').remove();
-                    that.$selectList.append(items.reduce(function(html, jsonItem) {
-                        if (!that.$selectedItems.is('[value=' + jsonItem.value + ']')) {
-                            html = html + that.jsonToHtml(jsonItem);
-                        }
-                        return html;
-                    }, ''));
-                    that.$selectItems = that.$selectList.find('input[' + that.selectItemName + ']:enabled');
-                    var method = that.$selectItems.length? 'hide' : 'show';
-                    that.$noResults[method]();
-                    that.events();
+                    that.clearList();
+                    that.setItems(items);
                 }
             }
 
@@ -686,10 +772,65 @@
             this.updateSelectAll();
         },
 
-        jsonToHtml(jsonItem, index)
+        getFromCache: function(text) {
+            var that = this,
+                items = null;
+            Object.keys(this.cache).forEach(function(key) {
+                if(~text.indexOf(key)) {
+                    items = that.cache[key];
+                }
+            });
+
+            return items;
+        },
+        putInCache: function(text, items) {
+            var that = this;
+            Object.keys(this.cache).forEach(function(key) {
+                if(~key.indexOf(text)) delete(that.cache[key]);
+            });
+
+            this.cache[text] = items;
+        },
+
+        jsonToOption(jsonItem, index)
         {
-            var $option = $('<option value="' + jsonItem.value + '">' + jsonItem.text + '</option>');
-            return this.optionToHtml(index, $option[0])
+            var html = [];
+            if (Array.isArray(jsonItem)) {
+                html.push(
+                    '<optgroup label="' + index + '">',
+                        jsonItem.map(this.jsonToOption.bind(this)).join(),
+                    '</optgroup>'
+                );
+            } else {
+                html.push('<option value="' + jsonItem.value + '">' + jsonItem.text + '</option>');
+            }
+            return html.join('');
+        },
+
+        renderListFromJson(items)
+        {
+            var jsonItems,
+                that = this,
+                html = [];
+
+            for(var key in items) {
+                jsonItems = items[key];
+                if (Array.isArray(jsonItems)) { //it's category
+                    jsonItems = jsonItems.filter(function(jsonItem) {
+                        return !that.alreadySelected(jsonItem);
+                    });
+                    html.push(this.optionToHtml(key, this.jsonToOption(jsonItems, key)));
+                } else if (!that.alreadySelected(jsonItems)){
+                    html.push(this.optionToHtml(key, this.jsonToOption(jsonItems, key)));
+                }
+            }
+
+            return html.join('');
+        },
+
+        alreadySelected(item)
+        {
+            return this.$selectedItems.is('[value=' + item.value + ']');
         }
     };
 
@@ -756,6 +897,11 @@
         blockSeparator: '',
         displayValues: false,
         delimiter: ', ',
+        url: false,
+        minLetters: 3,
+        delay: 600,
+        minLettersText: 'Type at least % keys to process',
+        limit: 10,
 
         styler: function () {
             return false;
@@ -786,6 +932,12 @@
             return false;
         },
         onClick: function () {
+            return false;
+        },
+        onLoadStart: function() {
+            return false;
+        },
+        onLoadEnd: function () {
             return false;
         }
     };
