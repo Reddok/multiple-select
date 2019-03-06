@@ -211,7 +211,7 @@ select.course-filter{opacity:0;}
     display: inline-block;
     width: 30px;
     height: 30px;
-    background: transparent url("./spinner.gif") no-repeat center center / 30px 30px;
+    background: transparent url("../spinner.gif") no-repeat center center / 30px 30px;
 }
 .ms-drop .ms-loading-state {
     text-align: center;
@@ -227,7 +227,7 @@ select.course-filter{opacity:0;}
     margin: 20px 0;
 }
 
-.ms-drop ul > li.ms-no-results:hover {
+.ms-drop ul > li.ms-no-results:hover, .ms-drop ul > li.ms-selected-list:hover {
     background: none;
     color: inherit;
 }

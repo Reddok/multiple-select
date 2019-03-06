@@ -11,7 +11,11 @@
 
     function MultipleSelect($el, options) {
         var that = this,
-            name = $el.attr('name') || options.name || ''
+            name = $el.attr('name') || options.name || '';
+
+        if (options.url == null) {
+            throw new Error('An url for requesting data must be provided!');
+        }
 
         $el.parent().hide();
         var elWidth = $el.css("width");
@@ -32,35 +36,11 @@
         this.$parent.append(this.$choice);
         this.$parent.append(this.$drop);
 
-        if (this.$el.prop('disabled')) {
-            this.$choice.addClass('disabled');
-        }
         this.$parent.css('width', options.width || elWidth);
 
-        if (this.options.url) {
-            this.filterTimeout = null;
-            this.remoteMode = true;
-            this.initialized = false;
-            this.isAllLoaded = false;
-        }
-
-        if (!this.options.keepOpen && !this.remoteMode) {
-            $('body').click(function (e) {
-                if ($(e.target)[0] === that.$choice[0] ||
-                    $(e.target).parents('.ms-choice')[0] === that.$choice[0]) {
-                    return;
-                }
-
-                if (e.target.tagName.toUpperCase() === "INPUT" &&
-                    ($(e.target)[0] === that.$drop[0] ||
-                        $(e.target).parents('.ms-drop')[0] !== that.$drop[0]) &&
-                    that.options.isOpen) {
-                    console.log(e.target.tagName.toUpperCase() === "INPUT", $(e.target)[0] === that.$drop[0], $(e.target).parents('.ms-drop')[0] !== that.$drop[0]);
-                    that.close();
-                }
-            });
-        }
-
+        this.initialized = false;
+        this.cache = {};
+        this.state = this.generateState();
         this.selectAllName = 'name="selectAll' + name + '"';
         this.selectGroupName = 'name="selectGroup' + name + '"';
         this.selectItemName = 'name="selectItem' + name + '"';
@@ -70,27 +50,66 @@
         constructor: MultipleSelect,
 
         init: function () {
+            this.render();
+
+            this.$drop.find('ul').css('max-height', this.options.maxHeight + 'px');
+            this.$drop.find('.multiple').css('width', this.options.multipleWidth + 'px');
+
+            this.$disableItems = this.$drop.find('input[' + this.selectItemName + ']:disabled');
+            this.$noResults = this.$drop.find('.ms-no-results');
+            this.$spinner = this.$drop.find('.ms-loading-state');
+            this.$selectList = this.$drop.find('ul:not(.ms-selected-list)');
+            this.$selectedList = this.$drop.find('ul.ms-selected-list');
+            this.$selectGroups = $([]);
+            this.$selectedGroups = this.$drop.find('input[' + this.selectGroupName + ']:enabled:checked');
+            this.$selectItems = $([]);
+            this.$selectedItems = this.$drop.find('input[' + this.selectItemName + ']:enabled:checked');
+            this.$selectAll = this.$selectList.find('input[' + this.selectAllName + ']');
+            this.$selectedAll = this.$selectedList.find('input[' + this.selectAllName + ']');
+            this.$searchInput = this.$drop.find('.ms-search input');
+
+            this.events();
+
+            this.update(true);
+            this.updateSelectAll();
+            this.clearLoadingState();
+
+            if (this.options.isOpen) {
+                this.open();
+            }
+        },
+
+        render: function() {
             var that = this,
                 html = [];
-            if (this.options.filter || this.remoteMode) {
+
+            html.push(
+                '<div class="ms-search">',
+                '<input type="text" autocomplete="off" autocorrect="off" autocapitilize="off" spellcheck="false"' +
+                '>',
+                '</div>'
+            );
+
+            html.push('<ul class="ms-selected-list">');
+
+            if (this.options.selectAll && !this.options.single) {
                 html.push(
-                    '<div class="ms-search">',
-                    '<input type="text" autocomplete="off" autocorrect="off" autocapitilize="off" spellcheck="false"' +
-                    (this.remoteMode? 'placeholder="' + this.options.minLettersText.replace('%', this.options.minLetters) + '"' : '') +
-                    '>',
-                    '</div>'
+                    '<li class="ms-select-all">',
+                    '<label>',
+                    '<input type="checkbox" ' + this.selectAllName + ' checked /> ',
+                    this.options.selectAllDelimiter[0] + this.options.selectAllText + this.options.selectAllDelimiter[1],
+                    '</label>',
+                    '</li>'
                 );
             }
 
-            if (this.remoteMode) {
-                html.push('<ul class="ms-selected-list">');
-                $.each(this.$el.find('option:selected'), function (i, elm) {
-                    html.push(that.optionToHtml(i, elm));
-                });
-                html.push('</ul>');
-            }
+            $.each(this.$el.find('option:selected'), function (i, elm) {
+                html.push(that.optionToHtml(i, elm));
+            });
+            html.push('</ul>');
 
             html.push('<ul>');
+
             if (this.options.selectAll && !this.options.single) {
                 html.push(
                     '<li class="ms-select-all">',
@@ -102,58 +121,15 @@
                 );
             }
 
-            if (this.remoteMode) {
-                html.push(
-                    '<li class="ms-loading-state">',
-                        '<span class="ms-spinner"></span>',
-                    '</li>'
-                );
-
-                $.each(this.$el.find('option:not(:selected)'), function (i, elm) {
-                    html.push(that.optionToHtml(i, elm));
-                });
-            } else {
-                $.each(this.$el.children(), function (i, elm) {
-                    html.push(that.optionToHtml(i, elm));
-                });
-            }
-
             html.push('<li class="ms-no-results">' + this.options.noMatchesFound + '</li>');
+            html.push(
+                '<li class="ms-loading-state">',
+                '<span class="ms-spinner"></span>',
+                '</li>'
+            );
             html.push('</ul>');
+
             this.$drop.html(html.join(''));
-
-            this.$drop.find('ul').css('max-height', this.options.maxHeight + 'px');
-            this.$drop.find('.multiple').css('width', this.options.multipleWidth + 'px');
-
-            this.$searchInput = this.$drop.find('.ms-search input');
-            this.$selectAll = this.$drop.find('input[' + this.selectAllName + ']');
-            this.$selectGroups = this.$drop.find('input[' + this.selectGroupName + ']');
-            this.$selectItems = this.$drop.find('input[' + this.selectItemName + ']:enabled');
-            this.$disableItems = this.$drop.find('input[' + this.selectItemName + ']:disabled');
-            this.$noResults = this.$drop.find('.ms-no-results');
-
-            if (this.remoteMode) {
-                this.$spinner = this.$drop.find('.ms-loading-state');
-                this.$selectList = this.$drop.find('ul:not(.ms-selected-list)');
-                this.$selectedList = this.$drop.find('ul.ms-selected-list');
-                this.$selectGroups = $([]);
-                this.$selectedGroups = this.$drop.find('input[' + this.selectGroupName + ']:enabled:checked');
-                this.$selectItems = $([]);
-                this.$selectedItems = this.$drop.find('input[' + this.selectItemName + ']:enabled:checked');
-                this.cache = {};
-            }
-
-            this.events();
-            this.updateSelectAll(true);
-            this.update(true);
-
-            if (this.remoteMode) {
-                this.clearLoadingState();
-            }
-
-            if (this.options.isOpen) {
-                this.open();
-            }
         },
 
         optionToHtml: function (i, elm, group, groupDisabled) {
@@ -192,10 +168,10 @@
                         '<li  title="'+text+'" ' + clss + style + '>',
                         '<label' + (disabled ? ' class="disabled"' : '') + '>',
                         '<input type="' + type + '" ' + this.selectItemName + ' value="' + value + '"' +
-                            (selected ? ' checked="checked"' : '') +
-                            (disabled ? ' disabled="disabled"' : '') +
-                            (group ? ' data-group="' + group + '"' : '') +
-                            '/> ',
+                        (selected ? ' checked="checked"' : '') +
+                        (disabled ? ' disabled="disabled"' : '') +
+                        (group ? ' data-group="' + group + '"' : '') +
+                        '/> ',
                         text,
                         '</label>',
                         '</li>'
@@ -258,48 +234,41 @@
                 if (e.keyCode === 9 && e.shiftKey) { // Ensure shift-tab causes lost focus from filter as with clicking away
                     that.close();
                 }
-            }).off('keyup').on('keyup', function (e) {
-                    if (that.options.filterAcceptOnEnter &&
-                        (e.which === 13 || e.which == 32) && // enter or space
-                        that.$searchInput.val() // Avoid selecting/deselecting if no choices made
-                        ) {
-                        that.$selectAll.click();
-                        that.close();
-                        that.focus();
-                        return;
-                    }
-                    that.filter();
-                });
+            }).off('keyup').on('keyup', debounce(function () {
+                var $this = $(this);
+                that.filterString = $.trim($this.val().toLowerCase());
+                that.filter();
+            }, this.options.delay));
+
             this.$selectAll.off('click').on('click', function () {
-                var checked = $(this).prop('checked'),
-                    $items = that.$selectItems.filter(':visible');
-                if ($items.length === that.$selectItems.length) {
-                    that[checked ? 'checkAll' : 'uncheckAll']();
-                } else { // when the filter option is true
-                    that.$selectGroups.prop('checked', checked);
-                    $items.prop('checked', checked);
-                    that.options[checked ? 'onCheckAll' : 'onUncheckAll']();
-                    that.update();
-                }
+                var $items = that.$selectItems.filter(':visible');
+                that.checkAll($items);
             });
+
+            this.$selectedAll.off('click').on('click', function () {
+                that.uncheckAll(that.$selectedItems);
+            });
+
             this.$selectGroups.off('click').on('click', function () {
                 var group = $(this).parent().attr('data-group'),
                     $items = that.$selectItems.filter(':visible'),
                     $children = $items.filter('[data-group="' + group + '"]'),
                     checked = $children.length !== $children.filter(':checked').length;
                 $children.prop('checked', checked);
-                that.updateSelectAll();
+
                 that.update();
                 that.options.onOptgroupClick({
                     label: $(this).parent().text(),
                     checked: checked,
                     children: $children.get()
                 });
-            });
-            this.$selectItems.off('click').on('click', function () {
                 that.updateSelectAll();
+            });
+            this.$selectItems.add(this.$selectedItems).off('click').on('click', function () {
                 that.update();
                 that.updateOptGroupSelect();
+                that.updateSelectAll();
+
                 that.options.onClick({
                     label: $(this).parent().text(),
                     value: $(this).val(),
@@ -311,31 +280,27 @@
                 }
             });
 
-            if (this.remoteMode) {
-                this.$selectedGroups.off('click').on('click', function () {
-                    var group = $(this).parent().attr('data-group'),
-                        $items = that.$selectedItems.filter(':visible'),
-                        $children = $items.filter('[data-group="' + group + '"]'),
-                        checked = $children.length !== $children.filter(':checked').length;
-                    $children.prop('checked', checked);
-                    that.update();
-                    that.options.onOptgroupClick({
-                        label: $(this).parent().text(),
-                        checked: checked,
-                        children: $children.get()
-                    });
+            this.$selectedGroups.off('click').on('click', function () {
+                var group = $(this).parent().attr('data-group'),
+                    $items = that.$selectedItems.filter(':visible'),
+                    $children = $items.filter('[data-group="' + group + '"]'),
+                    checked = $children.length !== $children.filter(':checked').length;
+                $children.prop('checked', checked);
+                that.update();
+                that.options.onOptgroupClick({
+                    label: $(this).parent().text(),
+                    checked: checked,
+                    children: $children.get()
                 });
+                that.updateSelectAll();
+            });
 
-                this.$selectedItems.off('click').on('click', function () {
-                    that.update();
-                    that.updateOptGroupSelect();
-                    that.options.onClick({
-                        label: $(this).parent().text(),
-                        value: $(this).val(),
-                        checked: $(this).prop('checked')
-                    });
-                });
-            }
+            this.$selectList.on('scroll', debounce(function() {
+                var inBottomEdge = that.$selectList[0].scrollHeight - that.$selectList.height() - 20 <= that.$selectList.scrollTop();
+                if (inBottomEdge && !that.state.isAllLoaded) {
+                    that.loadMore();
+                }
+            }, this.options.delay));
         },
 
         setLoadingState: function() {
@@ -352,17 +317,31 @@
         },
 
         checkEmptiness: function() {
-            if (this.$selectItems.length > 0) {
-                this.$noResults.hide();
-            } else {
-                this.$noResults.show();
+            var method = this.isSelectEmpty()? 'show' : 'hide';
+            this.$noResults[method]();
+        },
+
+        isSelectEmpty: function() {
+            return this.$selectItems.filter(':visible').length <= 0;
+        },
+
+        updateSelectAll: function () {
+            var methodSelect = this.$selectItems.length? 'show' : 'hide',
+                methodSelected = this.$selectedItems.length? 'show' : 'hide';
+
+            this.$selectAll.prop('checked', false).parent()[methodSelect]();
+            this.$selectedAll.prop('checked', true).parent()[methodSelected]();
+
+            if (!this.$selectItems.length && this.$selectedItems.length) {
+                this.options.onCheckAll();
             }
         },
 
         clearList: function() {
-            this.$selectList.find('li').not('.ms-loading-state, .ms-no-results').remove();
+            this.$selectList.find('li').not('.ms-select-all, .ms-loading-state, .ms-no-results').remove();
             this.$selectItems = $([]);
             this.checkEmptiness();
+            this.updateSelectAll();
         },
 
         open: function () {
@@ -373,14 +352,8 @@
             this.$choice.find('>div').addClass('open');
             this.$drop.show();
 
-            // fix filter bug: no results show
-            this.$selectAll.parent().show();
-            // this.$noResults.hide();
-
-            // Fix #77: 'All selected' when no options
-            if (this.$el.children().length === 0) {
-                this.$selectAll.parent().hide();
-                // this.$noResults.show();
+            if (this.$el.children().length) {
+                this.$selectAll.parent().show();
             }
 
             if (this.options.container) {
@@ -388,37 +361,22 @@
                 this.$drop.appendTo($(this.options.container));
                 this.$drop.offset({ top: offset.top, left: offset.left });
             }
+
             if (this.options.filter) {
                 this.$searchInput.val('');
                 this.$searchInput.focus();
                 this.filter();
             }
+
             this.options.onOpen();
 
-            if (this.remoteMode) {
-                this.$searchInput.focus();
-            }
+            this.$searchInput.focus();
 
-            if (this.remoteMode && !this.initialized) {
+            if (!this.initialized) {
                 var that = this;
                 this.clearList();
-                this.setLoadingState();
-                this.options.onLoadStart();
-                $.ajax(this.options.url, {
-                    type: 'GET',
-                    data: {limit: this.options.limit + 1} ,
-                    success: function(data) {
-                        var items = JSON.parse(data).data;
-                        that.clearLoadingState();
-
-                        that.initialized = true;
-                        that.isAllLoaded = that.options.limit >= that.getLengthOfLoadedOptions(items);
-
-                        that.setItems(items);
-                    },
-                    error: function() {
-                        that.clearLoadingState();
-                    }
+                this.request(function() {
+                    that.initialized = true;
                 });
             }
         },
@@ -430,19 +388,25 @@
                 if (Array.isArray(items[key])) { //it's category
                     count += items[key].length;
                 } else {
-                   count++;
+                    count++;
                 }
             }
             return count;
         },
 
+        loadMore: function()
+        {
+            this.request();
+        },
+
         setItems: function(items)
         {
-            this.$selectList.append(this.renderListFromJson(items));
+            this.$spinner.before(this.renderListFromJson(items));
             this.$selectItems = this.$selectList.find('input[' + this.selectItemName + ']:enabled');
             this.$selectGroups = this.$selectList.find('input[' + this.selectGroupName + ']:enabled');
             this.events();
             this.checkEmptiness();
+            this.updateSelectAll();
         },
 
         close: function () {
@@ -460,8 +424,111 @@
         },
 
         update: function (isInit) {
-            var selects = this.getSelects(),
-                $span = this.$choice.find('>span');
+            var that = this;
+
+            this.$selectItems.filter('input[' + this.selectItemName + ']:checked').each(function(i, item) {
+                var $item = $(item),
+                    $container = that.$selectedList,
+                    groupAttr = $item.attr('data-group'),
+                    $group = that.$selectedGroups.closest('[data-group]').filter('[data-group=' + groupAttr + ']').closest('li');
+
+                if (groupAttr) {
+                    if (!$group.length) {
+                        $group = that.$selectGroups.closest('[data-group]').filter('[data-group=' + groupAttr + ']').first().closest('li').clone(true);
+                        $group.find('input').prop('checked', true);
+                        $group.appendTo($container);
+                        that.$selectedGroups = that.$selectedGroups.add($group.find('input'));
+                    }
+                    $item.closest('li').insertAfter($group);
+                } else {
+                    $item.closest('li').appendTo($container);
+                }
+            });
+
+            this.$selectedItems.filter('input[' + this.selectItemName + ']:not(:checked)').each(function(i, item) {
+                var $item = $(item),
+                    $listItem = $item.closest('li'),
+                    $container = that.$selectList,
+                    groupAttr = $item.attr('data-group'),
+                    $group = that.$selectGroups.closest('[data-group]').filter('[data-group=' + groupAttr + ']').closest('li');
+
+                if (!that.checkInState($item.val())) {
+                    return $listItem.remove();
+                }
+
+                if (groupAttr) {
+                    if (!$group.length) {
+                        $group = that.$selectedGroups.closest('[data-group]').filter('[data-group=' + groupAttr + ']').closest('li').clone(true);
+                        $group.find('input').prop('checked', false);
+
+                        if (that.$selectAll.length) {
+                            $group.insertAfter(that.$selectAll.closest('li'));
+                        } else {
+                            $group.prependTo($container);
+                        }
+
+                        that.$selectGroups = that.$selectGroups.add($group.find('input'));
+                    }
+                    $listItem.insertAfter($group);
+                } else {
+                    if (that.$selectAll.length) {
+                        $listItem.insertAfter(that.$selectAll.closest('li'));
+                    } else {
+                        $listItem.prependTo($container);
+                    }
+                }
+            });
+
+            this.$selectItems = this.$drop.find('input[' + this.selectItemName + ']:not(:checked)');
+            this.$selectedItems = this.$drop.find('input[' + this.selectItemName + ']:checked');
+
+            this.$selectedGroups.closest('[data-group]').each(function(i, group) {
+                var $group = $(group),
+                    groupAttr = $group.attr('data-group');
+                if (!that.$selectedItems.filter('input[data-group=' + groupAttr + ']:checked').length) {
+                    $group.closest('li').remove();
+                }
+            });
+
+            this.$selectGroups.closest('[data-group]').each(function(i, group) {
+                var $group = $(group),
+                    groupAttr = $group.attr('data-group');
+                if (!that.$selectItems.filter('input[data-group=' + groupAttr + ']:not(:checked)').length) {
+                    $group.closest('li').remove();
+                }
+            });
+
+            this.$selectGroups = this.$drop.find('input[' + this.selectGroupName + ']:not(:checked)');
+            this.$selectedGroups = this.$drop.find('input[' + this.selectGroupName + ']:checked');
+            this.events();
+
+            this.updateSelect();
+            this.checkEmptiness();
+
+            if (!isInit && this.isSelectEmpty() && !this.state.isAllLoaded) {
+                this.loadMore();
+            }
+            this.updatePlaceholder();
+
+            if (!isInit && !this.options.preventChange) {
+                this.$el.trigger('change');
+            }
+        },
+
+        updateSelect: function() {
+            var that = this;
+
+            this.$el.html('');
+            this.$selectedItems.map(function(index, item) {
+                var $option = '<option selected value="' + $(item).val() + '"></option>';
+                that.$el.append($option);
+            });
+        },
+
+        updatePlaceholder: function () {
+            var $span = this.$choice.find('>span'),
+                that = this,
+                selects = this.getSelects();
 
             if (selects.length === 0) {
                 $span.addClass('placeholder').html(this.options.placeholder);
@@ -469,122 +536,16 @@
                 $span.removeClass('placeholder').html(
                     (this.options.displayValues ? selects : this.getSelects('text'))
                         .join(this.options.delimiter));
-            } else if (this.options.allSelected &&
-                selects.length === this.$selectItems.length + this.$disableItems.length) {
+            } else if (this.options.allSelected && selects.length && !this.$selectItems.length) {
                 $span.removeClass('placeholder').html(this.options.allSelected);
-            } else if ((this.options.countSelected || this.options.etcaetera) && selects.length > this.options.minimumCountSelected) {
-                if (this.options.etcaetera) {
-                    $span.removeClass('placeholder').html((this.options.displayValues ? selects : this.getSelects('text').slice(0, this.options.minimumCountSelected)).join(this.options.delimiter) + '...');
-                }
-                else {
-                    $span.removeClass('placeholder').html(this.options.countSelected
-                        .replace('#', selects.length)
-                        .replace('%', this.$selectItems.length + this.$disableItems.length));
-                }
+            } else if (this.options.countSelected && selects.length > this.options.minimumCountSelected) {
+                $span.removeClass('placeholder').html(this.options.countSelected
+                    .replace('#', selects.length)
+                    .replace('%', this.$selectItems.length + this.$disableItems.length));
             } else {
                 $span.removeClass('placeholder').html(
                     (this.options.displayValues ? selects : this.getSelects('text'))
                         .join(this.options.delimiter));
-            }
-            // set selects to select
-
-            if (!this.remoteMode) {
-                this.$el.val(this.getSelects());
-                // add selected class to selected li
-                this.$drop.find('li').removeClass('selected');
-                this.$drop.find('input[' + this.selectItemName + ']:checked').each(function () {
-                    $(this).parents('li').first().addClass('selected');
-                });
-            } else {
-                var that = this;
-                this.$selectItems.filter('input[' + this.selectItemName + ']:checked').each(function(i, item) {
-                    var $item = $(item),
-                        $container = that.$selectedList,
-                        groupAttr = $item.attr('data-group'),
-                        $group = that.$selectedGroups.closest('[data-group]').filter('[data-group=' + groupAttr + ']').closest('li');
-
-                    if (groupAttr) {
-                        if (!$group.length) {
-                            $group = that.$selectGroups.closest('[data-group]').filter('[data-group=' + groupAttr + ']').closest('li').clone(true);
-                            $group.find('input').prop('checked', true);
-                            $group.appendTo($container);
-                            that.$selectedGroups = that.$selectedGroups.add($group.find('input'));
-                        }
-                        $item.closest('li').insertAfter($group);
-                    } else {
-                        $item.closest('li').appendTo($container);
-                    }
-                });
-
-                this.$selectedItems.filter('input[' + this.selectItemName + ']:not(:checked)').each(function(i, item) {
-                    var $item = $(item),
-                        $listItem = $item.closest('li'),
-                        text = $listItem.text().toLowerCase(),
-                        search = that.$searchInput.val().toLowerCase(),
-                        $container = that.$selectList,
-                        groupAttr = $item.attr('data-group'),
-                        $group = that.$selectGroups.closest('[data-group]').filter('[data-group=' + groupAttr + ']').closest('li');
-
-                    if (text.indexOf(search) !== 1) {
-                        return $listItem.remove();
-                    }
-
-                    if (groupAttr) {
-                        if (!$group.length) {
-                            $group = that.$selectedGroups.closest('[data-group]').filter('[data-group=' + groupAttr + ']').closest('li').clone(true);
-                            $group.find('input').prop('checked', false);
-                            $group.prependTo($container);
-                            that.$selectGroups = that.$selectGroups.add($group.find('input'));
-                        }
-                        $item.closest('li').insertAfter($group);
-                    } else {
-                        $listItem.prependTo($container);
-                    }
-                });
-
-                this.$selectItems = this.$drop.find('input[' + this.selectItemName + ']:not(:checked)');
-                this.$selectedItems = this.$drop.find('input[' + this.selectItemName + ']:checked');
-
-                this.$selectedGroups.closest('[data-group]').each(function(i, group) {
-                    var $group = $(group),
-                        groupAttr = $group.attr('data-group');
-                    if (!that.$selectedItems.filter('input[data-group=' + groupAttr + ']:checked').length) {
-                        $group.closest('li').remove();
-                    }
-                });
-
-                this.$selectGroups.closest('[data-group]').each(function(i, group) {
-                    var $group = $(group),
-                        groupAttr = $group.attr('data-group');
-                    if (!that.$selectItems.filter('input[data-group=' + groupAttr + ']:not(:checked)').length) {
-                        $group.closest('li').remove();
-                    }
-                });
-                this.$selectGroups = this.$drop.find('input[' + this.selectGroupName + ']:not(:checked)');
-                this.$selectedGroups = this.$drop.find('input[' + this.selectGroupName + ']:checked');
-                this.events();
-
-                this.$el.html('');
-                this.$selectedItems.map(function(index, item) {
-                    var $option = '<option selected value="' + $(item).val() + '"></option>';
-                    that.$el.append($option);
-                });
-                this.checkEmptiness();
-            }
-
-            // trigger <select> change event
-            if (!isInit && !this.options.preventChange) {
-                this.$el.trigger('change');
-            }
-        },
-
-        updateSelectAll: function (Init) {
-            var $items = this.$selectItems;
-            if (!Init) { $items = $items.filter(':visible'); }
-            this.$selectAll.prop('checked', $items.length &&
-                $items.length === $items.filter(':checked').length);
-            if (this.$selectAll.prop('checked')) {
-                this.options.onCheckAll();
             }
         },
 
@@ -656,19 +617,21 @@
             this.$choice.addClass('disabled');
         },
 
-        checkAll: function () {
-            this.$selectItems.prop('checked', true);
+        checkAll: function (items) {
+            items.prop('checked', true);
             this.$selectGroups.prop('checked', true);
             this.$selectAll.prop('checked', true);
             this.update();
+            this.updateSelectAll();
             this.options.onCheckAll();
         },
 
-        uncheckAll: function () {
-            this.$selectItems.prop('checked', false);
+        uncheckAll: function (items) {
+            items.prop('checked', false);
             this.$selectGroups.prop('checked', false);
             this.$selectAll.prop('checked', false);
             this.update();
+            this.updateSelectAll();
             this.options.onUncheckAll();
         },
 
@@ -688,117 +651,90 @@
 
         filter: function () {
             var that = this,
-                text = $.trim(this.$searchInput.val()).toLowerCase(),
-                items;
+                text = this.filterString,
+                cachedState;
 
-            if (this.remoteMode && !this.isAllLoaded) {
-                items = this.getFromCache(text);
-                clearTimeout(this.filterTimeout);
+            cachedState = this.getFromCache(text);
 
-                if (!items) {
-                    this.filterTimeout = setTimeout(function() {
-                        that.clearList();
+            if (!cachedState) {
+                this.clearList();
+                this.state = this.generateState();
+                this.request(this.$searchInput.focus.bind(this.$searchInput));
+                return;
+            }
 
-                        if (text.length < that.options.minLetters) return;
+            if (this.state !== cachedState) {
+                this.state = cachedState;
+                this.clearList();
+                this.setItems(this.state.items);
+            }
 
-                        that.setLoadingState();
-                        $.ajax(that.options.url, {
-                            type: 'GET',
-                            data: {search: text, limit: that.options.limit} ,
-                            success: function(data) {
-                                var items = JSON.parse(data).data;
+            this.$selectItems.each(function () {
+                var $parent = $(this).parent();
+                $parent[$parent.text().toLowerCase().indexOf(text) < 0 ? 'hide' : 'show']();
+            });
+            this.$disableItems.parent().hide();
 
-                                that.putInCache(text, items);
-                                that.clearLoadingState();
-
-                                that.setItems(items);
-                                that.$searchInput.focus();
-                            },
-                            error: function() {
-                                that.clearLoadingState();
-                            }
-                        });
-                    }, this.options.delay);
-                    return;
-                } else {
-                    that.clearList();
-                    that.setItems(items);
+            this.$selectGroups.each(function () {  // search for groups
+                var $parent = $(this).parent();
+                if(~$parent.text().toLowerCase().indexOf(text)){
+                    var $items = that.$selectItems.filter('[data-group="' + $parent.attr('data-group') + '"]');
+                    $items.each(function () {
+                        var $item_parent = $(this).parent();
+                        $item_parent['show']();
+                    });
                 }
-            }
+            });
 
-            if (text.length === 0) {
-                this.$selectItems.parent().show();
-                this.$disableItems.parent().show();
-                this.$selectGroups.parent().show();
-            } else {
-                setTimeout(function () {
-                    if(text == $.trim(that.$searchInput.val()).toLowerCase()){
-                        that.$selectItems.each(function () {
-                            var $parent = $(this).parent();
-                            $parent[$parent.text().toLowerCase().indexOf(text) < 0 ? 'hide' : 'show']();
-                        });
-                        that.$disableItems.parent().hide();
-                        that.$selectGroups.each(function () {  // search for groups
-                            var $parent = $(this).parent();
-                            if($parent.text().toLowerCase().indexOf(text) > 0){
-                                var $items = that.$selectItems.filter('[data-group="' + $parent.attr('data-group') + '"]');
-                                $items.each(function () {
-                                    var $item_parent = $(this).parent();
-                                    $item_parent['show']();
-                                });
-                            }
-                        });
+            this.$selectGroups.each(function () {
+                var $parent = $(this).parent();
+                var group = $parent.attr('data-group'),
+                    $items = that.$selectItems.filter(':visible');
+                $parent[$items.filter('[data-group="' + group + '"]').length === 0 ? 'hide' : 'show']();
+            });
 
-                        that.$selectGroups.each(function () {
-                            var $parent = $(this).parent();
-                            var group = $parent.attr('data-group'),
-                                $items = that.$selectItems.filter(':visible');
-                            $parent[$items.filter('[data-group="' + group + '"]').length === 0 ? 'hide' : 'show']();
-                        });
-
-                        //Check if no matches found
-                        if (that.$selectItems.filter(':visible').length) {
-                            that.$selectAll.parent().show();
-                            that.$noResults.hide();
-                        } else {
-                            that.$selectAll.parent().hide();
-                            that.$noResults.show();
-                        }
-                    }
-                }, 600);
-
-            }
+            this.checkEmptiness();
             this.updateOptGroupSelect();
             this.updateSelectAll();
         },
 
         getFromCache: function(text) {
             var that = this,
-                items = null;
+                data;
             Object.keys(this.cache).forEach(function(key) {
-                if(~text.indexOf(key)) {
-                    items = that.cache[key];
+                var current = that.cache[key];
+                if (current.isAllLoaded) {
+                    if(~text.indexOf(key)) {
+                        data = that.cache[key];
+                    }
+                } else {
+                    if(text === key) {
+                        data = that.cache[key];
+                    }
                 }
             });
 
-            return items;
+            return data;
         },
-        putInCache: function(text, items) {
+        putInCache: function(text, data) {
             var that = this;
-            Object.keys(this.cache).forEach(function(key) {
-                if(~key.indexOf(text)) delete(that.cache[key]);
-            });
 
-            this.cache[text] = items;
+            if(data.isAllLoaded) {
+                Object.keys(this.cache).forEach(function(key) {
+                    if(~key.indexOf(text)) delete(that.cache[key]);
+                });
+            }
+
+            this.cache[text] = data;
         },
 
-        jsonToOption(jsonItem, index)
+        jsonToOption: function(jsonItem, index)
         {
             var html = [];
             if (Array.isArray(jsonItem)) {
                 html.push(
                     '<optgroup label="' + index + '">',
-                        jsonItem.map(this.jsonToOption.bind(this)).join(),
+                    jsonItem.map(this.jsonToOption.bind(this)).join(),
                     '</optgroup>'
                 );
             } else {
@@ -807,7 +743,7 @@
             return html.join('');
         },
 
-        renderListFromJson(items)
+        renderListFromJson: function(items)
         {
             var jsonItems,
                 that = this,
@@ -819,7 +755,9 @@
                     jsonItems = jsonItems.filter(function(jsonItem) {
                         return !that.alreadySelected(jsonItem);
                     });
-                    html.push(this.optionToHtml(key, this.jsonToOption(jsonItems, key)));
+                    if (jsonItems.length) {
+                        html.push(this.optionToHtml(key, this.jsonToOption(jsonItems, key)));
+                    }
                 } else if (!that.alreadySelected(jsonItems)){
                     html.push(this.optionToHtml(key, this.jsonToOption(jsonItems, key)));
                 }
@@ -828,9 +766,95 @@
             return html.join('');
         },
 
-        alreadySelected(item)
+        alreadySelected: function(item)
         {
-            return this.$selectedItems.is('[value=' + item.value + ']');
+            return this.$selectedItems.is('[value="' + item.value + '"]');
+        },
+
+        request: function(callback)
+        {
+            var that = this;
+
+            callback = callback || function (){};
+
+            this.setLoadingState();
+            $.ajax(this.options.url, {
+                type: 'GET',
+                data: {search: this.filterString, limit: this.options.limit + 1, offset: this.state.loadedCount} ,
+                success: function(data) {
+                    var items = JSON.parse(data).data,
+                        isAllLoaded = that.options.limit >= that.getLengthOfLoadedOptions(items),
+                        lastKey,
+                        keys,
+                        merged;
+
+                    if (!isAllLoaded) {
+                        if (Array.isArray(items)) {
+                            items.pop();
+                        } else {
+                            keys = Object.keys(items);
+                            lastKey = keys[keys.length - 1];
+                            items[lastKey].pop();
+                        }
+                    }
+
+                    if (Array.isArray(items)) {
+                        merged = that.state.items.concat(items);
+                    } else {
+                        merged = that.state.items;
+
+                        for (var group in items) {
+                            if (merged[group]) {
+                                merged[group] = merged[group].concat(items[group]);
+                            } else {
+                                merged[group] = items[group];
+                            }
+                        }
+                    }
+
+                    that.state = {
+                        items: merged,
+                        isAllLoaded: isAllLoaded,
+                        loadedCount: that.state.loadedCount + that.options.limit
+                    };
+
+                    that.clearLoadingState();
+                    that.putInCache(that.filterString, that.state);
+                    that.setItems(items);
+                    callback();
+                },
+                error: function() {
+                    that.clearLoadingState();
+                }
+            });
+        },
+
+        generateState: function()
+        {
+            return {
+                items: [],
+                isAllLoaded: false,
+                loadedCount: 0
+            }
+        },
+
+        checkInState: function(value)
+        {
+            var inState = false;
+            for(var key in this.state.items) {
+                if (inState) {
+                    break;
+                }
+
+                if (Array.isArray(this.state.items[key])) {
+                    inState = this.state.items[key].some(function(item) {
+                        return item.value == value;
+                    });
+                } else {
+                    inState = this.state.items[key].value == value;
+                }
+            }
+            return inState;
         }
     };
 
@@ -874,6 +898,24 @@
         return value ? value : this;
     };
 
+    function debounce(f, ms) {
+        var timer = null;
+
+        return function () {
+            var args = arguments,
+                that = this;
+
+            if (timer) {
+                clearTimeout(timer);
+            }
+
+            timer = setTimeout(function() {
+                f.apply(that, args);
+                timer = null;
+            }, ms);
+        };
+    }
+
     $.fn.multipleSelect.defaults = {
         name: '',
         isOpen: false,
@@ -883,12 +925,11 @@
         selectAllDelimiter: ['[', ']'],
         allSelected: 'All selected',
         minimumCountSelected: 3,
-        countSelected: '# of % selected',
+        countSelected: '# selected',
         noMatchesFound: 'No matches found',
         multiple: false,
         multipleWidth: 80,
         single: false,
-        filter: false,
         width: undefined,
         maxHeight: 250,
         container: null,
@@ -897,10 +938,8 @@
         blockSeparator: '',
         displayValues: false,
         delimiter: ', ',
-        url: false,
-        minLetters: 3,
+        url: null,
         delay: 600,
-        minLettersText: 'Type at least % keys to process',
         limit: 10,
 
         styler: function () {
