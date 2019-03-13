@@ -295,12 +295,14 @@
                 that.updateSelectAll();
             });
 
-            this.$selectList.on('scroll', debounce(function() {
-                var inBottomEdge = that.$selectList[0].scrollHeight - that.$selectList.height() - 20 <= that.$selectList.scrollTop();
-                if (inBottomEdge && !that.state.isAllLoaded) {
-                    that.loadMore();
-                }
-            }, this.options.delay));
+            if (this.options.infinityScroll) {
+                this.$selectList.on('scroll', debounce(function() {
+                    var inBottomEdge = that.$selectList[0].scrollHeight - that.$selectList.height() - 20 <= that.$selectList.scrollTop();
+                    if (inBottomEdge && !that.state.isAllLoaded) {
+                        that.loadMore();
+                    }
+                }, this.options.delay));
+            }
         },
 
         setLoadingState: function() {
@@ -941,7 +943,7 @@
         url: null,
         delay: 600,
         limit: 10,
-
+        infinityScroll: true,
         styler: function () {
             return false;
         },
